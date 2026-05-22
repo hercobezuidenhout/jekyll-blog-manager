@@ -1,0 +1,10 @@
+{
+  "id": "jequill",
+  "name": "Jequill",
+  "version": "0.0.1",
+  "minAppVersion": "0.15.0",
+  "description": "Manage your Jekyll blog posts like a CRM - track drafts and publish with git commits",
+  "author": "Herco Bezuidenhout",
+  "authorUrl": "",
+  "isDesktopOnly": true
+}

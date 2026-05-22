@@ -1,0 +1,145 @@
+name: Hotfix Release
+
+on:
+  push:
+    branches:
+      - 'hotfix/**'
+
+jobs:
+  release:
+    name: Create Hotfix Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Detect base version
+        id: base
+        run: |
+          BRANCH_POINT=$(git merge-base HEAD origin/main)
+          echo "Branch point: $BRANCH_POINT"
+
+          BASE_TAG=$(git describe --tags --abbrev=0 --exclude='*-beta.*' $BRANCH_POINT 2>/dev/null || echo "")
+
+          if [ -z "$BASE_TAG" ]; then
+            echo "Error: Cannot determine base version - no stable tags found"
+            exit 1
+          fi
+
+          BASE_VERSION=$(echo "$BASE_TAG" | sed 's/^v//')
+          echo "base=$BASE_VERSION" >> $GITHUB_OUTPUT
+          echo "Base version: $BASE_VERSION"
+
+      - name: Calculate hotfix version
+        id: version
+        run: |
+          BASE="${{ steps.base.outputs.base }}"
+
+          if [[ $BASE =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            MAJOR="${BASH_REMATCH[1]}"
+            MINOR="${BASH_REMATCH[2]}"
+            PATCH="${BASH_REMATCH[3]}"
+          else
+            echo "Invalid base version format: $BASE"
+            exit 1
+          fi
+
+          PATCH=$((PATCH + 1))
+          HOTFIX_VERSION="$MAJOR.$MINOR.$PATCH"
+
+          echo "version=$HOTFIX_VERSION" >> $GITHUB_OUTPUT
+          echo "Hotfix version: $HOTFIX_VERSION"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Update versions
+        run: |
+          HOTFIX_VERSION="${{ steps.version.outputs.version }}"
+          node scripts/sync-version.js $HOTFIX_VERSION
+
+      - name: Update CHANGELOG.md
+        run: |
+          HOTFIX_VERSION="${{ steps.version.outputs.version }}"
+          DATE=$(date +%Y-%m-%d)
+
+          awk -v version="$HOTFIX_VERSION" -v date="$DATE" '
+            /## \[Unreleased\]/ {
+              print
+              print ""
+              print "## [" version "] - " date
+              print "### Fixed"
+              print "- Hotfix for critical issue"
+              next
+            }
+            { print }
+          ' CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+
+          echo "Updated CHANGELOG.md with hotfix version $HOTFIX_VERSION"
+
+      - name: Commit hotfix release
+        run: |
+          HOTFIX_VERSION="${{ steps.version.outputs.version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json manifest.json versions.json CHANGELOG.md
+          git commit -m "hotfix: Release v$HOTFIX_VERSION"
+
+      - name: Create git tag
+        run: |
+          HOTFIX_VERSION="${{ steps.version.outputs.version }}"
+          git tag "v$HOTFIX_VERSION"
+          git push origin "v$HOTFIX_VERSION"
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Extract CHANGELOG for release
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          CHANGELOG_CONTENT=$(sed -n "/## \[$VERSION\]/,/^## \[/{ /^## \[$VERSION\]/d; /^## \[/d; p; }" CHANGELOG.md | sed '/^$/d')
+
+          cat > release_notes.md <<EOF
+          **Hotfix release** - Patch release for v${{ steps.base.outputs.base }}.
+
+          ## Changes in this release
+
+          $CHANGELOG_CONTENT
+
+          ---
+
+          ### Installation
+
+          **Manual Installation**:
+          1. Download \`main.js\` and \`manifest.json\`
+          2. Create folder \`VaultFolder/.obsidian/plugins/jequill/\`
+          3. Move both files to that folder
+          4. Reload Obsidian and enable the plugin
+
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for full history.
+          EOF
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            dist/main.js \
+            dist/manifest.json \
+            --title "v${{ steps.version.outputs.version }}" \
+            --notes-file release_notes.md \
+            --latest \
+            --generate-notes

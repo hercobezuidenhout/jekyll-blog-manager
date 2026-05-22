@@ -1,0 +1,134 @@
+name: PR Validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    branches:
+      - main
+
+jobs:
+  validate-changelog:
+    name: Validate CHANGELOG
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check CHANGELOG was modified
+        run: |
+          if git diff --name-only origin/main...HEAD | grep -q "CHANGELOG.md"; then
+            echo "✓ CHANGELOG.md was modified"
+          else
+            echo "✗ CHANGELOG.md must be updated with your changes"
+            exit 1
+          fi
+
+  type-check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run type check
+        run: npx tsc -noEmit -skipLibCheck
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Verify build artifacts
+        run: |
+          if [ ! -f dist/main.js ]; then
+            echo "✗ dist/main.js not found"
+            exit 1
+          fi
+          if [ ! -f dist/manifest.json ]; then
+            echo "✗ dist/manifest.json not found"
+            exit 1
+          fi
+          echo "✓ Build artifacts verified"
+
+  check-breaking-change:
+    name: Check for Breaking Changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for BREAKING CHANGE in commits
+        id: breaking
+        run: |
+          if git log --format=%B origin/main..HEAD | grep -iq "BREAKING CHANGE"; then
+            echo "has_breaking=true" >> $GITHUB_OUTPUT
+            echo "::warning::Breaking change detected"
+          else
+            echo "has_breaking=false" >> $GITHUB_OUTPUT
+            echo "No breaking changes detected"
+          fi
+
+      - name: Check for bump label
+        if: steps.breaking.outputs.has_breaking == 'true'
+        run: |
+          LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels --jq '.labels[].name')
+          if echo "$LABELS" | grep -qE "bump:(major|minor)"; then
+            echo "✓ Breaking change approved with bump label"
+          else
+            echo "::error::Breaking change detected but no bump label found"
+            echo ""
+            echo "Please add one of these labels to this PR:"
+            echo "  • bump:major - for major version bump (e.g., 1.0.0 → 2.0.0)"
+            echo "  • bump:minor - for minor version bump (e.g., 1.0.0 → 1.1.0)"
+            echo ""
+            echo "After adding the label, this check will automatically re-run."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}

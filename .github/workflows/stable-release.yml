@@ -1,0 +1,122 @@
+name: Stable Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      beta_version:
+        description: 'Beta version to promote (e.g., 1.3.0-beta.2)'
+        required: true
+        type: string
+
+jobs:
+  release:
+    name: Promote Beta to Stable
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Validate beta version exists
+        run: |
+          BETA_VERSION="${{ github.event.inputs.beta_version }}"
+          if ! git rev-parse "v$BETA_VERSION" >/dev/null 2>&1; then
+            echo "Error: Tag v$BETA_VERSION does not exist"
+            exit 1
+          fi
+          echo "✓ Beta version v$BETA_VERSION exists"
+
+      - name: Calculate stable version
+        id: version
+        run: |
+          BETA_VERSION="${{ github.event.inputs.beta_version }}"
+          STABLE_VERSION=$(echo "$BETA_VERSION" | sed 's/-beta\.[0-9]*$//')
+          echo "stable=$STABLE_VERSION" >> $GITHUB_OUTPUT
+          echo "Stable version: $STABLE_VERSION"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Update versions
+        run: |
+          STABLE_VERSION="${{ steps.version.outputs.stable }}"
+          node scripts/sync-version.js $STABLE_VERSION
+
+      - name: Update CHANGELOG.md
+        run: |
+          STABLE_VERSION="${{ steps.version.outputs.stable }}"
+          DATE=$(date +%Y-%m-%d)
+
+          sed -i "s/## \[Unreleased\]/## [Unreleased]\n\n## [$STABLE_VERSION] - $DATE/" CHANGELOG.md
+
+          echo "Updated CHANGELOG.md with version $STABLE_VERSION and date $DATE"
+
+      - name: Commit stable release
+        run: |
+          STABLE_VERSION="${{ steps.version.outputs.stable }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json manifest.json versions.json CHANGELOG.md
+          git commit -m "release: Release v$STABLE_VERSION"
+          git push origin main
+
+      - name: Create git tag
+        run: |
+          STABLE_VERSION="${{ steps.version.outputs.stable }}"
+          git tag "v$STABLE_VERSION"
+          git push origin "v$STABLE_VERSION"
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Extract CHANGELOG for release
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.stable }}"
+          CHANGELOG_CONTENT=$(sed -n "/## \[$VERSION\]/,/^## \[/{ /^## \[$VERSION\]/d; /^## \[/d; p; }" CHANGELOG.md | sed '/^$/d')
+
+          cat > release_notes.md <<EOF
+          ## Changes in this release
+
+          $CHANGELOG_CONTENT
+
+          ---
+
+          ### Installation
+
+          **Official Method** (when published to Obsidian Community Plugins):
+          - Search for "Jequill" in Obsidian's community plugins
+
+          **Manual Installation**:
+          1. Download \`main.js\` and \`manifest.json\`
+          2. Create folder \`VaultFolder/.obsidian/plugins/jequill/\`
+          3. Move both files to that folder
+          4. Reload Obsidian and enable the plugin
+
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for full history.
+          EOF
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.version.outputs.stable }}" \
+            dist/main.js \
+            dist/manifest.json \
+            --title "v${{ steps.version.outputs.stable }}" \
+            --notes-file release_notes.md \
+            --latest \
+            --generate-notes
