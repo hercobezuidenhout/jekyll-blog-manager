@@ -55,12 +55,6 @@ BRAT will automatically update to new beta releases.
 5. Reload Obsidian (Ctrl/Cmd + R)
 6. Enable the plugin in Settings → Community Plugins
 
-## Setup
-
-Configure the blog path in Settings → Jequill:
-- If the plugin is in the same vault as your Jekyll blog, set to `.`
-- If managing a remote blog, set to the full path (e.g., `~/Projects/my-blog`)
-
 ## Workflow
 
 1. **Create**: Click "New Post" → Enter title → Start writing
@@ -78,19 +72,3 @@ Configure the blog path in Settings → Jequill:
 - Jekyll blog with `_drafts/` and `_posts/` folders
 - Git repository initialized
 - Obsidian 0.15.0+
-
-## Version
-
-Current version: **0.0.1** (pre-release)
-
-## Development
-
-```bash
-npm install
-npm run dev    # Watch mode
-npm run build  # Production build
-```
-
-## License
-
-MIT
